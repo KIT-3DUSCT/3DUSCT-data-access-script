@@ -1,21 +1,23 @@
 %%%minimal USCT script
 %% Version 1.2 M. Zapf, KIT 2016
-function []=USCT_dataconvert()
+function [imag]=USCT_dataconvert()
 close all
-Pathdata='Y:\Data\_USCT3Dv2\Mannheim\exp0010_mannheim_gelatine\brustpute' %'C:\brustphantom'; %your path to data, please change
+%Pathdata='/home/katz/work/Hiwi/exp_006_2D_USCT/AScans' %'C:\brustphantom'; %your path to data, please change
+
+Pathdata = '/home/katz/fser/Hiwi/data/Experiments/exp_010_2D_analyticBreast/AScans';
 
 %profile on
 
 %%% load data and constants
-load(['.' filesep 'geometryFileUSCT3Dv2_3.mat'])
 load([Pathdata filesep 'info.mat']);
-load([Pathdata filesep 'CEMeasured.mat']);
+load([Pathdata filesep 'geometry.mat'])
+load([Pathdata filesep 'CE.mat']);
 load([Pathdata filesep 'TASTempComp.mat'],'TASTemperature');
 load([Pathdata filesep 'Movements.mat'])
 
-numTAS=157;
-numEmit=4;
-numRec=9;
+numTAS=24;
+numEmit=2;
+numRec=3;
 useMPs=1;
 
 %%geometry preparation
@@ -28,20 +30,24 @@ for i=1:numTAS geomEmitBase=cat(3,geomEmitBase,TASElements(i).emitterPositions);
 end
 
 middlePoint=squeeze(mean(mean(geomRecBase(:,:,:),1),3));
-middlePoint(3)=squeeze(geomRecBase(5,3,37)); %middlePoint(1:2)=[0 rec_pos(37,5,2)];
+try middlePoint(3)=squeeze(geomRecBase(5,3,37)); %middlePoint(1:2)=[0 rec_pos(37,5,2)];
+catch
+    middlePoint(3)=mean(mean(geomRecBase(:,3,:),3)); 
+end
 
 soundvelocity=1480; %initial value, later updated
-eoffset=20e-7; %system time delay
+eoffset=0; %20e-7; %system time delay
 SF=0; %sample frequency
 envelopeImaging=0;
+matchedFiltering=0;
 
 %%image
-imagXYZ=[1024 1024 12];  %X Y Z
+imagXYZ=[1024 1024 1];  %X Y Z
 imag=zeros(imagXYZ);
 imag2=zeros(imagXYZ);
 imagsum=zeros(imagXYZ);
-imagRes=0.00015; %in m
-imagstart=[-0.076 -0.076 0.03]; %[-0.11 -0.11 0.03];%[-0.042 -0.042 0.03]; %in m
+imagRes=0.24/1024; %in m
+imagstart=[-0.12 -0.12 0]; %[-0.11 -0.11 0.03];%[-0.042 -0.042 0.03]; %in m
 imagPosX=imagstart(1):imagRes:imagstart(1)+(imagXYZ(1)-1)*imagRes;
 imagPosY=imagstart(2):imagRes:imagstart(2)+(imagXYZ(2)-1)*imagRes;
 imagPosZ=imagstart(3):imagRes:imagstart(3)+(imagXYZ(3)-1)*imagRes;
@@ -58,10 +64,10 @@ downsampling=10;
 [meshx,meshy,meshz]=meshgrid(imagPosX(1:downsampling:end),imagPosY(1:downsampling:end),imagPosZ(1:downsampling:end));
 
 %use faster MEX?
-SAFT_MEX=0; % 0 = Matlab, 1= MEX, 2 = both for debug
+SAFT_MEX=1; % 0 = Matlab, 1= MEX, 2 = both for debug
 visualization=1; % 0 = no visualization, 1= debug visualization
 image_save=0;
-angleEmRecComb=110; %angle filtering in degree
+angleEmRecComb=180; %angle filtering in degree
 
 upsampling=20e6; %%upsampling DATA
 
@@ -74,7 +80,11 @@ i=0;
 for Mp=1:min(size(MovementsListreal,1),useMPs)
     movement=MovementsListreal(Mp,:);
     rotshift=0; %shift by 20 degree ->
-    transform_matrix= makehgtform('zrotate',2*pi*(rotshift+movement(1))/360)*makehgtform('translate',[0 0 movement(2)]);
+    if any(isnan(movement))
+        transform_matrix= eye(4);       
+    else
+         transform_matrix= makehgtform('zrotate',2*pi*(rotshift+movement(1))/360)*makehgtform('translate',[0 0 movement(2)]);
+    end
     
     %transform it to the actual lift and rot-pos
     geomRec=zeros(size(geomRecBase)); geomEmit=zeros(size(geomEmitBase));
@@ -102,7 +112,10 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
             %%[Gain,Data]=loadAscan_v2(eT,eE,rT,rE,Mp,Pathdata); %load single Data slow 
             load(sprintf('%s%sTAS%03d%sTASRotation%02d%sEmitter%02d.mat',Pathdata,filesep,eT,filesep,Mp,filesep,eE));
                        
-            CE=CEMeasured;
+            try CE=CEMeasured;
+            catch,
+                load([Pathdata filesep 'CE.mat']);
+            end
             
             if strcmp(AScanDatatype,'float16')
                 AScans=convertfp16tofloat(AScans);
@@ -112,6 +125,8 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
             if Bandpassundersampling==1
                 AScans=ReconstructBandpasssubsampling(double(AScans));
                 CE=ReconstructBandpasssubsampling(double(CE));
+                SF=10e6;
+            else
                 SF=10e6;
             end
             CE=mean(CE,2);
@@ -126,14 +141,16 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
             %timedelay
             t0=(0:1/ SF:( size(AScans,1) -1)*1/ SF);
             t=t0+eoffset;
-            AScans=interp1(t,AScans,t0,'cubic',0);
+            AScans=interp1(t,AScans,t0,'PCHIP',0);
             %figure; plot(t0,data,t0,data_i);
            
             %%%recover amplitude
             AScans=AScans./repmat(Amplification',[size(AScans,1) 1]);
             
-            %%%matched filtered bandwith restoring
-            AScans=ifft(fft(AScans).*conj((fft(CE)+20*eps)./ abs((fft(CE)+20*eps))));
+            if matchedFiltering==1
+                %%%matched filtered bandwith restoring
+                AScans=ifft(fft(AScans).*conj((fft(CE)+20*eps)./ abs((fft(CE)+20*eps))));
+            end
             
             if envelopeImaging
                 AScans=abs(hilbert(AScans));
@@ -150,7 +167,7 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
                                   
                     %selected Ascan
                     Data=AScans(:,find(receiverIndices==rE & TASIndices==rT));
-                    SF=10e6; %%from org Data -> will be changed
+                    %SF=10e6; %%from org Data -> will be changed
                     %figure(3); plot(Data)
                     if isempty(Data) continue; disp('warning: empty data'); end %%%early exit
                                        
@@ -162,19 +179,19 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
                 
                     imagPos=imagstart;
                     if SAFT_MEX==1 || SAFT_MEX==2 %SAFT MEX
-                        if visualization>1 tic, end
+                        %if visualization>1 tic, end
                         imag=addsig2vol_3(circshift(Data,+0),single(imagPos'),single(squeeze(geomRec(rE,:,rT)))',single(squeeze(geomEmit(eE,:,eT)))',single(soundvelocity),single(imagRes),single(1/SF),uint32(imagXYZ'),imag);
-                        if visualization>1 t=toc, (t\numel(imagPosAll))/1024^2, end  % kVoxel/s
+                        %if visualization>1 t=toc, (t\numel(imagPosAll))/1024^2, end  % kVoxel/s
                     end
                     if SAFT_MEX==0 || SAFT_MEX==2 %%MATLAB SAFT
                         %%SAFT MATLAB NAIVE
-                        %imag2=SAFT_MATLAB(Data,imagstart,squeeze(geomRec(rE,:,rT)),squeeze(geomEmit(eE,:,eT)),soundvelocity,imagRes,SF,imagXYZ,imag2);
+                        %imag=SAFT_MATLAB(Data,imagstart,squeeze(geomRec(rE,:,rT)),squeeze(geomEmit(eE,:,eT)),soundvelocity,imagRes,SF,imagXYZ,imag);
                         
                         %%SAFT MATLAB_vec
-                        tic
-                        Data(length(Data)*3)=0; %padding to maximum possible size (for index access)
-                        imag2=SAFT_MATLAB_vec(Data,imagPosAll,squeeze(geomRec(rE,:,rT)),squeeze(geomEmit(eE,:,eT)),soundvelocity,imagRes,SF,imagXYZ,imag2);
-                        t=toc, (t\numel(imagPosAll))/1024^2    % kVoxel/s
+                        %tic
+                        %Data(length(Data)*3)=0; %padding to maximum possible size (for index access)
+                        imag=SAFT_MATLAB_vec(Data,imagPosAll,squeeze(geomRec(rE,:,rT)),squeeze(geomEmit(eE,:,eT)),soundvelocity,imagRes,SF,imagXYZ,imag);
+                        %t=toc, (t\numel(imagPosAll))/1024^2    % kVoxel/s
                     end
                     
                     if visualization>1
@@ -189,7 +206,7 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
                     end
                     
                     if visualization>0 & SAFT_MEX<2
-                        figure(3); imagesc(imagPosX,imagPosY,imag(:,:,1));title(sprintf('TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
+                        figure(3); imagesc(imagPosX,imagPosY,sqrt(abs(imag(:,:,1)))); title(sprintf('TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
                         colorbar; drawnow;
                     else
                         figure(4); imagesc(imagPosX,imagPosY,imag2(:,:,1)); title(sprintf('SAFT MATLAB, TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
@@ -220,7 +237,7 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
     end
 end
 
-save('workspace.mat');
+%save('workspace.mat');
 end
 
 function imag=SAFT_MATLAB(Data,imagstart,geomRec,geomEmit,soundvelocity,imagRes,SF,imagXYZ,imag)
