@@ -9,9 +9,6 @@ URL: sftp://share.lsdf.kit.edu
 port: 2222
 Protocol: sftp
 Folder: SHARED_DATA
- 
-Login: u_ipe
-Password: lsdf!ipe2013
 
 
 License
