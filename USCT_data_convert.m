@@ -1,16 +1,19 @@
 %%%minimal USCT script
-%% Version 1.2 M. Zapf, KIT 2016
-function [imag]=USCT_dataconvert()
+%% Version 1.3 M. Zapf, KIT 2016
+function [imag]=USCT_data_convert()
 close all
 %Pathdata='/home/katz/work/Hiwi/exp_006_2D_USCT/AScans' %'C:\brustphantom'; %your path to data, please change
 
-Pathdata = '/home/katz/fser/Hiwi/data/Experiments/exp_010_2D_analyticBreast/AScans';
+Pathdata='Y:\Data\_USCT3Dv2\Mannheim\exp0010_mannheim_gelatine\brustpute' %Pathdata = '/home/katz/fser/Hiwi/data/Experiments/exp_010_2D_analyticBreast/AScans';
 
 %profile on
 
 %%% load data and constants
 load([Pathdata filesep 'info.mat']);
-load([Pathdata filesep 'geometry.mat'])
+try load(['.' filesep 'geometryFileUSCT3Dv2_3.mat'])
+catch
+    load([Pathdata filesep 'geometry.mat'])
+end
 load([Pathdata filesep 'CE.mat']);
 load([Pathdata filesep 'TASTempComp.mat'],'TASTemperature');
 load([Pathdata filesep 'Movements.mat'])
@@ -36,18 +39,18 @@ catch
 end
 
 soundvelocity=1480; %initial value, later updated
-eoffset=0; %20e-7; %system time delay
+eoffset=20e-7; %system time delay
 SF=0; %sample frequency
 envelopeImaging=0;
-matchedFiltering=0;
+matchedFiltering=1;
 
 %%image
-imagXYZ=[1024 1024 1];  %X Y Z
+imagXYZ=[1024 1024 1];  %X Y Z 
 imag=zeros(imagXYZ);
 imag2=zeros(imagXYZ);
 imagsum=zeros(imagXYZ);
-imagRes=0.24/1024; %in m
-imagstart=[-0.12 -0.12 0]; %[-0.11 -0.11 0.03];%[-0.042 -0.042 0.03]; %in m
+imagRes=0.24/imagXYZ(1); %in m (cubes only!)
+imagstart=[-0.11 -0.11 0.04]; %[-0.11 -0.11 0.03];%[-0.042 -0.042 0.03]; %in m
 imagPosX=imagstart(1):imagRes:imagstart(1)+(imagXYZ(1)-1)*imagRes;
 imagPosY=imagstart(2):imagRes:imagstart(2)+(imagXYZ(2)-1)*imagRes;
 imagPosZ=imagstart(3):imagRes:imagstart(3)+(imagXYZ(3)-1)*imagRes;
@@ -64,10 +67,10 @@ downsampling=10;
 [meshx,meshy,meshz]=meshgrid(imagPosX(1:downsampling:end),imagPosY(1:downsampling:end),imagPosZ(1:downsampling:end));
 
 %use faster MEX?
-SAFT_MEX=1; % 0 = Matlab, 1= MEX, 2 = both for debug
+SAFT_MEX=0; % 0 = Matlab, 1= MEX, 2 = both for debug
 visualization=1; % 0 = no visualization, 1= debug visualization
 image_save=0;
-angleEmRecComb=180; %angle filtering in degree
+angleEmRecComb=120; %angle filtering in degree 180° is everthing, 120° is common transmission suppression
 
 upsampling=20e6; %%upsampling DATA
 
@@ -83,7 +86,7 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
     if any(isnan(movement))
         transform_matrix= eye(4);       
     else
-         transform_matrix= makehgtform('zrotate',2*pi*(rotshift+movement(1))/360)*makehgtform('translate',[0 0 movement(2)]);
+        transform_matrix= makehgtform('zrotate',2*pi*(rotshift+movement(1))/360)*makehgtform('translate',[0 0 movement(2)]);
     end
     
     %transform it to the actual lift and rot-pos
@@ -112,22 +115,36 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
             %%[Gain,Data]=loadAscan_v2(eT,eE,rT,rE,Mp,Pathdata); %load single Data slow 
             load(sprintf('%s%sTAS%03d%sTASRotation%02d%sEmitter%02d.mat',Pathdata,filesep,eT,filesep,Mp,filesep,eE));
                        
-            try CE=CEMeasured;
+            try load([Pathdata filesep 'CEMeasured.mat']); %measured Coded excitation
+                CE=CEMeasured;
             catch,
-                load([Pathdata filesep 'CE.mat']);
+                load([Pathdata filesep 'CE.mat']); %defined coded exciation CE CS_SF 
             end
             
             if strcmp(AScanDatatype,'float16')
                 AScans=convertfp16tofloat(AScans);
-                CE=convertfp16tofloat(CE);
+                if exist('CEMeasured','var') %reconstruct only IF MEASURED
+                   CE=convertfp16tofloat(CE);
+                end
             end
             if length(CE)<size(AScans,1) CE(size(AScans,1),:)=0; end %%padding
             if Bandpassundersampling==1
                 AScans=ReconstructBandpasssubsampling(double(AScans));
-                CE=ReconstructBandpasssubsampling(double(CE));
+                if exist('CEMeasured','var') %reconstruct only IF MEASURED
+                    CE=ReconstructBandpasssubsampling(double(CE));
+                else                    
+                    if CE_SF>SF %same samplefreq
+                       CE=interp1(0:length(CE)-1,CE,0: CE_SF/SF:length(CE)-1);
+                    end
+                end
                 SF=10e6;
             else
                 SF=10e6;
+            end
+            
+           
+            if length(CE)<size(AScans,1) %padding
+                CE(size(AScans,1))=mean(CE);
             end
             CE=mean(CE,2);
             CE=repmat(CE,[1 size(AScans,2)]);
@@ -152,7 +169,7 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
                 AScans=ifft(fft(AScans).*conj((fft(CE)+20*eps)./ abs((fft(CE)+20*eps))));
             end
             
-            if envelopeImaging
+            if envelopeImaging==1
                 AScans=abs(hilbert(AScans));
             end
                         
@@ -205,8 +222,9 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
                         drawnow;
                     end
                     
-                    if visualization>0 & SAFT_MEX<2
-                        figure(3); imagesc(imagPosX,imagPosY,sqrt(abs(imag(:,:,1)))); title(sprintf('TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
+                    if visualization>0 && SAFT_MEX<2
+                        %figure(3); imagesc(imagPosX,imagPosY,sqrt(abs(imag(:,:,1)))); title(sprintf('SQRT dedynamic SAFT: TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
+                        figure(3); imagesc(imagPosX,imagPosY,((imag(:,:,1)))); title(sprintf('SAFT: TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
                         colorbar; drawnow;
                     else
                         figure(4); imagesc(imagPosX,imagPosY,imag2(:,:,1)); title(sprintf('SAFT MATLAB, TAS-Receiver %i, Receiver ele. %i, TAS-Emitter %i, Emitter ele. %i, Movement position %i',rT, rE, eT, eE, Mp));
@@ -276,9 +294,12 @@ try
     idx=1+round(SF*dist/soundvelocity); %+1 for matlab 1 indexing
     
     %%data map
+    idx(idx>size(Data,1))=size(Data,1); %set to last value....FIXME
+    if all(idx==size(Data,1)) disp('Warning: everything outside view window'); return; end
     imag=imag+Data(idx);
 catch %recursive imagesize reduction on OOM
     clear dist idx gR gE
+    %%separating along third dimension 
     imag1=SAFT_MATLAB_vec(Data,imagPosAll(:,:,1:floor(size(imagPosAll,3)/2),:),geomRec,geomEmit,soundvelocity,imagRes,SF,[imagXYZ(1:2) ,floor(size(imagPosAll,3)/2)],imag(:,:,1:floor(size(imagPosAll,3)/2)));
     imag2=SAFT_MATLAB_vec(Data,imagPosAll(:,:,1+floor(size(imagPosAll,3)/2):end,:),geomRec,geomEmit,soundvelocity,imagRes,SF,[imagXYZ(1:2) ,length(imag(1,1,1+floor(size(imagPosAll,3)/2):end))],imag(:,:,1+floor(size(imagPosAll,3)/2):end));
     
