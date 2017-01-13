@@ -1,15 +1,8 @@
-Karlsruhe Institute of Technology, Michael Zapf 2016
+Karlsruhe Institute of Technology, USCT project, Michael Zapf 2016
 
-Begin:
-Please, use an proper FTP client, for instance filezilla (https://filezilla-project.org/).
+Data under
 
-Data and inital script access can be obtained here.
-
-URL: sftp://share.lsdf.kit.edu
-port: 2222
-Protocol: sftp
-Folder: SHARED_DATA
-
+http://ipeusctdb1.ipe.kit.edu/~usct/challenge/
 
 License
 
