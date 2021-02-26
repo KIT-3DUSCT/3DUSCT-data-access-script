@@ -1,27 +1,59 @@
-%%%minimal USCT script
-%% Version 1.3 M. Zapf, KIT 2016
+%%%minimal USCT II data & metadata load and usage script
+%% Version 1.4 M. Zapf, KIT 2016-2021
+%% Home repository https://github.com/KIT-3DUSCT/3DUSCT-data-access-script
+%% Please submit patches, bugs and pull requests :), thank you!
+%% License of this code is permissive BSD 3 clause.
+%%
+%% Optional support libraries: https://github.com/KIT-3DUSCT/SAFT-CPU
+%%                             https://github.com/KIT-3DUSCT/Faster-1D-XCorr
+%%
+%% profile call: "profile off, profile on, USCT_data_convert(); profile off, profile report,"
+%% tested with: _exp0066 , _exp119_Pr9_P2 , _exp131_ , exp0010 and all the open sozrce data
+
 function [imag]=USCT_data_convert()
 close all
+clear all
 %Pathdata='/home/katz/work/Hiwi/exp_006_2D_USCT/AScans' %'C:\brustphantom'; %your path to data, please change
 
-Pathdata='Y:\Data\_USCT3Dv2\Mannheim\exp0010_mannheim_gelatine\brustpute' %Pathdata = '/home/katz/fser/Hiwi/data/Experiments/exp_010_2D_analyticBreast/AScans';
+%Pathdata='Y:\Data\_USCT3Dv2\Mannheim\exp0010_mannheim_gelatine\brustpute' %Pathdata = '/home/katz/fser/Hiwi/data/Experiments/exp_010_2D_analyticBreast/AScans';
+%Pathdata='Y:\Data\_USCT3Dv2\_exp131_measurments_for_neslihan\neslihan_phantom1'
+%Pathdata='Y:\Data\_USCT3Dv2\_exp119_Pr9_P2'
+Pathdata='Y:\Data\_USCT3Dv2\_exp0066_phantom (MF1.6MHz) (fixed)'
 
-%profile on
-
-%%% load data and constants
+%%% load meta data and constants
 load([Pathdata filesep 'info.mat']);
 try load(['.' filesep 'geometryFileUSCT3Dv2_3.mat'])
 catch
-    load([Pathdata filesep 'geometry.mat'])
+    load([Pathdata filesep 'geometry.mat']) %legacy alternative
 end
 load([Pathdata filesep 'CE.mat']);
 load([Pathdata filesep 'TASTempComp.mat'],'TASTemperature');
 load([Pathdata filesep 'Movements.mat'])
 
-numTAS=24;
-numEmit=2;
-numRec=3;
-useMPs=1;
+%%% experiment flags block - select data subsets
+numTAS = 24; %all: 157, 1-157 are possibilities for USCT II
+numEmit= 2; %all: 4, 1-4 are possibilities for USCT II
+numRec = 3; %all: 9, 1-9 are possibilities for USCT II
+useMPs = 1; %experiment dependend: 1-10 typically
+
+%%% signal processing
+upsampling=20e6; %%in Hz, upsampling of AScans -> set higher than 10e6, multiplies of 10e6 
+matchedFiltering = 1; % pulse compression with the coded excitation signal, increases SNR
+eoffset = 20e-7; %in sec, Excitation signal delay, empirical gathered for USCT II
+trytosuppressbaddata = 1; %try to detect errornous AScan data via std-dev
+angleEmRecComb = 120; %in degree, filters AScans out under specific angles, increases SNR: 180° is everything ("off"), 120° is common USCT transmission suppression
+
+%%%SAFT imageing
+envelopeImaging = 1; % 0 = phase coherent imaging, 1 = envelope imaging (more robust against system errors but lower resolution)
+SAFT_MEX = 0; % 0 = default SAFT Matlab-code, 1 = faster SAFT MEX-code (needs https://github.com/KIT-3DUSCT/SAFT-CPU), 2 = both for debug
+visualization = 1; % 0 = no visualization, 1 = debug visualization
+image_save = 0; %stores images on HDD
+%%
+%%%%end of parameter flags block -> image definition extra block later!
+
+%%%var init
+soundvelocity = 1480; %initial value, later updated
+SF = 0; %sample frequency, later updated
 
 %%geometry preparation
 geomRecBase=[]; geomEmitBase=[]; geomRecBaseNormals=[]; geomEmitBaseNormals=[];
@@ -38,14 +70,8 @@ catch
     middlePoint(3)=mean(mean(geomRecBase(:,3,:),3)); 
 end
 
-soundvelocity=1480; %initial value, later updated
-eoffset=20e-7; %system time delay
-SF=0; %sample frequency
-envelopeImaging=0;
-matchedFiltering=1;
-
-%%image
-imagXYZ=[1024 1024 1];  %X Y Z 
+%%image definition block
+imagXYZ=[1024 1024 1];  %X Y Z pixel amount = select any amount in any dimension
 imag=zeros(imagXYZ);
 imag2=zeros(imagXYZ);
 imagsum=zeros(imagXYZ);
@@ -63,30 +89,21 @@ z=imagPos(3):imagRes:imagPos(3)+(imagXYZ(3)-1)*imagRes;
 imagPosAll=cat(4,repmat(x',[1 imagXYZ(2) imagXYZ(3)]), repmat(y,[imagXYZ(1) 1 imagXYZ(3)]),repmat(shiftdim(z,-1),[imagXYZ(1) imagXYZ(2) 1]));
 
 %%downsampled image mesh
-downsampling=10;
+downsampling=10; %ratio
 [meshx,meshy,meshz]=meshgrid(imagPosX(1:downsampling:end),imagPosY(1:downsampling:end),imagPosZ(1:downsampling:end));
 
-%use faster MEX?
-SAFT_MEX=0; % 0 = Matlab, 1= MEX, 2 = both for debug
-visualization=1; % 0 = no visualization, 1= debug visualization
-image_save=0;
-angleEmRecComb=120; %angle filtering in degree 180° is everthing, 120° is common transmission suppression
-
-upsampling=20e6; %%upsampling DATA
-
-if SAFT_MEX==1 addsig2vol_3(8); end %%init 8 threads in SAFT MEX
+if SAFT_MEX==1 addsig2vol_3(8); end %%init 8 threads (set for your CPU number) in SAFT MEX
 
 i=0;
 
 %loop over all data
-
 for Mp=1:min(size(MovementsListreal,1),useMPs)
     movement=MovementsListreal(Mp,:);
     rotshift=0; %shift by 20 degree ->
     if any(isnan(movement))
-        transform_matrix= eye(4);       
+        transform_matrix = eye(4);       
     else
-        transform_matrix= makehgtform('zrotate',2*pi*(rotshift+movement(1))/360)*makehgtform('translate',[0 0 movement(2)]);
+        transform_matrix = makehgtform('zrotate',2*pi*(rotshift+movement(1))/360)*makehgtform('translate',[0 0 movement(2)]);
     end
     
     %transform it to the actual lift and rot-pos
@@ -110,55 +127,101 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
     
     for eT=1:numTAS
         for eE=1:numEmit
-            
+            clear AScanDatatype
             %%data reconstruction
             %%[Gain,Data]=loadAscan_v2(eT,eE,rT,rE,Mp,Pathdata); %load single Data slow 
             load(sprintf('%s%sTAS%03d%sTASRotation%02d%sEmitter%02d.mat',Pathdata,filesep,eT,filesep,Mp,filesep,eE));
-                       
+                     
+            
+            try AScanDatatype, catch, AScanDatatype='int16'; end %if not exist assume old legacy measurement with int16 (PS: "try catch" is faster than "exist")
+            
             try load([Pathdata filesep 'CEMeasured.mat']); %measured Coded excitation
                 CE=CEMeasured;
             catch,
-                load([Pathdata filesep 'CE.mat']); %defined coded exciation CE CS_SF 
+                load([Pathdata filesep 'CE.mat']); %defined input coded exciation CE CS_SF 
             end
             
             if strcmp(AScanDatatype,'float16')
                 AScans=convertfp16tofloat(AScans);
                 if exist('CEMeasured','var') %reconstruct only IF MEASURED
-                   CE=convertfp16tofloat(CE);
+                   CE=double(convertfp16tofloat(CE));
                 end
             end
-            if length(CE)<size(AScans,1) CE(size(AScans,1),:)=0; end %%padding
-            if Bandpassundersampling==1
-                AScans=ReconstructBandpasssubsampling(double(AScans));
+            %flip dim of CE to same dim as AScans
+            if size(CE,1)==1 && length(CE)>1 CE=CE'; end
+                        
+            if Bandpassundersampling==1                
                 if exist('CEMeasured','var') %reconstruct only IF MEASURED
-                    CE=ReconstructBandpasssubsampling(double(CE));
-                else                    
-                    if CE_SF>SF %same samplefreq
-                       CE=interp1(0:length(CE)-1,CE,0: CE_SF/SF:length(CE)-1);
-                    end
-                end
+                    if size(CE,1)<size(AScans,1) CE(size(AScans,1),:)=0; end %%padding for reconstructBPS
+                    CE=ReconstructBandpasssubsampling(double(CE));                    
+                end  
+                AScans=ReconstructBandpasssubsampling(double(AScans)); %now 10MHz
+                %now 10MHz
                 SF=10e6;
             else
+                %already 10MHz 
+                AScans=double(AScans);
                 SF=10e6;
             end
             
-           
-            if length(CE)<size(AScans,1) %padding
-                CE(size(AScans,1))=mean(CE);
+            %%data check -> try to suppress bad data blocks
+            if trytosuppressbaddata == 1
+                val=std(double(AScans)./repmat(max(AScans),[size(AScans,1) 1]));
+                
+                %set Ascans to 0 which have std==0 , constant
+                ACV=0;
+                AScans(:,val==ACV) = 0;
+                
+                %set Ascans to 0 which have std == small, dead channel/noise
+                ADV=0.0005;
+                AScans(:,val < ADV) = 0;
+                
+                %detect bad artifact AScans
+                ABV=0.6;
+                AScans(:,val > ABV)=0;
+                
+                if (sum(val > ABV)+sum(val==ACV)+sum(val < ADV)) > 0 
+                    disp(['AScans dropped: ' 'const: ' num2str(sum(val==ACV)) ', dead: ' num2str(sum(val<ADV)) ', bad: ' num2str(sum(val > ABV)) ', mean-std: ' num2str(mean(val))]);
+                else
+                    disp(['AScans mean std.: ' num2str(mean(val)) ]);
+                end
+                
             end
-            CE=mean(CE,2);
-            CE=repmat(CE,[1 size(AScans,2)]);
+            
+            if CE_SF>SF %to same samplefreq as AScans
+                if mod(size(CE,1),2) CE(end+1,:)=median(CE(:)); end
+                if any(CE_SF/SF == [2,4,6,8,10,20])
+                  CE=interpft(CE,size(CE,1)*(CE_SF\SF));
+                else
+                  CE=interp1((0:length(CE)-1)',CE,(0:CE_SF/SF:length(CE)-1)','PCHIP',0);
+                end
+            end
+           
+            if length(CE)<size(AScans,1) %padding, again
+                CE(size(AScans,1))=median(CE(:));                
+            end
+            CE=mean(CE,2); %if CE_measured
+            CE=repmat(CE,[1 size(AScans,2)]); %padding for AScan amount
             
             %%upsample DATA if requested
             if SF<upsampling
               AScans=interpft(AScans,size(AScans,1)*ceil(upsampling/SF));
-              CE=interpft(CE,size(CE,1)*ceil(upsampling/SF)); SF=upsampling;
+              CE=interpft(CE,size(CE,1)*ceil(upsampling/SF)); SF=upsampling; %update SF afterwards
             end
             
-            %timedelay
+            %system time delay
             t0=(0:1/ SF:( size(AScans,1) -1)*1/ SF);
             t=t0+eoffset;
-            AScans=interp1(t,AScans,t0,'PCHIP',0);
+            if eoffset~=0
+                if rem(eoffset,(1/SF)) == 0
+                  AScans = circshift(AScans,fix(eoffset/(1/SF)));
+                  %AScans(1:fix(eoffset/(1/SF)),:)=0;
+                else
+                  for i=1:size(AScans,2)
+                    AScans(:,i)=interp1(t,AScans(:,i),t0,'PCHIP',mean(AScans(:,i)));
+                  end
+                end
+            end
             %figure; plot(t0,data,t0,data_i);
            
             %%%recover amplitude
@@ -166,9 +229,11 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
             
             if matchedFiltering==1
                 %%%matched filtered bandwith restoring
-                AScans=ifft(fft(AScans).*conj((fft(CE)+20*eps)./ abs((fft(CE)+20*eps))));
+                AScans=fft(AScans).*conj((fft(CE)+20*eps)./ abs((fft(CE)+20*eps)));
+                AScans(1,:) = 0; %%DC free
+                AScans=ifft(AScans);
             end
-            
+             
             if envelopeImaging==1
                 AScans=abs(hilbert(AScans));
             end
