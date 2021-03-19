@@ -129,12 +129,10 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
     
     for eT=1:numTAS
         for eE=1:numEmit
-            clear AScanDatatype
             %%data reconstruction
             %%[Gain,Data]=loadAscan_v2(eT,eE,rT,rE,Mp,Pathdata); %load single Data slow 
             load(sprintf('%s%sTAS%03d%sTASRotation%02d%sEmitter%02d.mat',Pathdata,filesep,eT,filesep,Mp,filesep,eE));
-        
-            
+                   
             try load([Pathdata filesep 'CEMeasured.mat']); %measured Coded excitation
                 CE=CEMeasured;
             catch,
