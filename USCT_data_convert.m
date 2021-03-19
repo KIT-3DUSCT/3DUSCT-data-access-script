@@ -1,5 +1,5 @@
 %%%minimal USCT II data & metadata load and usage script
-%% Version 1.4 M. Zapf, KIT 2016-2021
+%% Version 1.41 M. Zapf, KIT 2016-2021
 %% Home repository https://github.com/KIT-3DUSCT/3DUSCT-data-access-script
 %% Please submit patches, bugs and pull requests :), thank you!
 %% License of this code is permissive BSD 3 clause.
@@ -22,6 +22,8 @@ Pathdata='Y:\Data\_USCT3Dv2\_exp0066_phantom (MF1.6MHz) (fixed)'
 
 %%% load meta data and constants
 load([Pathdata filesep 'info.mat']);
+try AScanDatatype, catch, AScanDatatype='int16'; end %if not exist assume old legacy measurement with int16 (PS: "try catch" is faster than "exist")
+       
 try load(['.' filesep 'geometryFileUSCT3Dv2_3.mat'])
 catch
     load([Pathdata filesep 'geometry.mat']) %legacy alternative
@@ -131,9 +133,7 @@ for Mp=1:min(size(MovementsListreal,1),useMPs)
             %%data reconstruction
             %%[Gain,Data]=loadAscan_v2(eT,eE,rT,rE,Mp,Pathdata); %load single Data slow 
             load(sprintf('%s%sTAS%03d%sTASRotation%02d%sEmitter%02d.mat',Pathdata,filesep,eT,filesep,Mp,filesep,eE));
-                     
-            
-            try AScanDatatype, catch, AScanDatatype='int16'; end %if not exist assume old legacy measurement with int16 (PS: "try catch" is faster than "exist")
+        
             
             try load([Pathdata filesep 'CEMeasured.mat']); %measured Coded excitation
                 CE=CEMeasured;
